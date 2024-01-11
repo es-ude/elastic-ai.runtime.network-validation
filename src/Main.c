@@ -1,74 +1,47 @@
 #define SOURCE_FILE "MAIN"
 
+// internal headers
 #include "Common.h"
 #include "Esp.h"
-#include "FreeRtosQueueWrapper.h"
-#include "FreeRtosTaskWrapper.h"
+#include "Flash.h"
+#include "enV5HwController.h"
+#include "MqttBroker.h"
 #include "Network.h"
+#include "NetworkConfiguration.h"
+#include "FpgaConfigurationHandler.h"
+#include "Protocol.h"
 
+// pico-sdk headers
 #include <hardware/watchdog.h>
+#include "hardware/spi.h"
 #include <pico/bootrom.h>
 #include <pico/stdlib.h>
 
-extern networkCredentials_t networkCredentials;
+// external headers
+#include <string.h>
+#include <malloc.h>
 
-/* region LED HANDLER */
+/* region VARIABLES/DEFINES */
 
-#define LED0_PIN 22
-#define LED1_PIN 24
-#define LED2_PIN 25
+// Flash
+spi_t spiToFlash = {.spi = spi0, .baudrate = 5000000, .sckPin = 2, .mosiPin = 3, .misoPin = 0};
+uint8_t flashChipSelectPin = 1;
 
-void led_init(uint8_t gpio) {
-    gpio_init(gpio);
-    gpio_set_dir(gpio, GPIO_OUT);
-}
+// MQTT
+char *twinID;
+bool subscribed = false;
 
-void leds_init() {
-    led_init(LED0_PIN);
-    led_init(LED1_PIN);
-    led_init(LED2_PIN);
-}
+typedef struct downloadRequest {
+    char *url;
+    size_t fileSizeInBytes;
+    size_t startAddress;
+} downloadRequest_t;
+downloadRequest_t *downloadRequest = NULL;
 
-void leds_all_on() {
-    gpio_put(LED0_PIN, 1);
-    gpio_put(LED1_PIN, 1);
-    gpio_put(LED2_PIN, 1);
-}
+//TODO find out, how FPGA "calculates" value and how to access it
+char *fgpaReturnValue;
 
-void leds_all_off() {
-    gpio_put(LED0_PIN, 0);
-    gpio_put(LED1_PIN, 0);
-    gpio_put(LED2_PIN, 0);
-}
-
-/* endregion LED HANDLER */
-
-_Noreturn void ledTask(void) {
-    while (true) {
-        PRINT("LEDs should now turn on");
-        leds_all_on();
-        freeRtosTaskWrapperTaskSleep(2000);
-        PRINT("LEDs should now turned off");
-        leds_all_off();
-        freeRtosTaskWrapperTaskSleep(2000);
-    }
-}
-
-/*! \brief Goes into bootloader mode when 'r' is pressed
- */
-_Noreturn void enterBootModeTask(void) {
-    while (true) {
-        if (getchar_timeout_us(10) == 'r' || !stdio_usb_connected()) {
-            PRINT_DEBUG("Boot Mode request detected.")
-            reset_usb_boot(0, 0);
-        }
-
-        // Watchdog update needs to be performed frequent, otherwise the device will crash
-        watchdog_update();
-        PRINT_DEBUG("watchdog updated")
-        freeRtosTaskWrapperTaskSleep(1000);
-    }
-}
+/* endregion VARIABLES/DEFINES */
 
 void init(void) {
     // First check if we crash last time -> reboot into boot rom mode
@@ -78,28 +51,104 @@ void init(void) {
 
     // init usb
     stdio_init_all();
+
     // waits for usb connection, REMOVE to continue without waiting for connection
     while ((!stdio_usb_connected())) {}
 
     // Checks connection to ESP and initialize ESP
     espInit();
 
-    // create freeRTOS task queue
-    freeRtosQueueWrapperCreate();
+    // initialize WiFi and MQTT broker
+    networkTryToConnectToNetworkUntilSuccessful(networkCredentials);
+    mqttBrokerConnectToBrokerUntilSuccessful(mqttHost, "eip://uni-due.de/es", "enV5");
 
-    // enables watchdog to check for reboots
-    watchdog_enable(2000, 1);
+    // initialize FPGA and flash
+    flashInit(&spiToFlash, flashChipSelectPin);
+    env5HwInit();
+    fpgaConfigurationHandlerInitialize();
+}
+
+void receiveDownloadBinRequest(posting_t posting) {
+    // get download request
+    char *urlStart = strstr(posting.data, "URL:") + 4;
+    char *urlEnd = strstr(urlStart, ";") - 1;
+    size_t urlLength = urlEnd - urlStart + 1;
+    char *url = malloc(urlLength);
+    memcpy(url, urlStart, urlLength);
+    url[urlLength - 1] = '\0';
+    char *sizeStart = strstr(posting.data, "SIZE:") + 5;
+    char *endSize = strstr(sizeStart, ";") - 1;
+    size_t length = strtol(sizeStart, &endSize, 10);
+
+    char *positionStart = strstr(posting.data, "POSITION:") + 9;
+    char *positionEnd = strstr(positionStart, ";") - 1;
+    size_t position = strtol(positionStart, &positionEnd, 10);
+
+    downloadRequest = malloc(sizeof(downloadRequest_t));
+    downloadRequest->url = url;
+    downloadRequest->fileSizeInBytes = length;
+    downloadRequest->startAddress = position;
+}
+
+void computeData(void) {
+    /* NOTE:
+     *   1. add listener for download start command (MQTT)
+     *      uart handle should only set flag -> download handled at task
+     *   2. download data from server and stored to flash
+     *   4. add listener for FPGA flashing command
+     *   5. trigger flash of FPGA
+     *      handled in UART interrupt
+     */
+
+    sleep_ms(2000);
+    protocolSubscribeForCommand("compute-data", (subscriber_t){.deliver = receiveDownloadBinRequest});
+
+    PRINT("FPGA Ready ...")
+
+    while (downloadRequest == NULL) {}
+
+    env5HwFpgaPowersOff();
+
+    PRINT_DEBUG("Download: position in flash: %i, address: %s, size: %i",
+                downloadRequest->startAddress, downloadRequest->url,
+                downloadRequest->fileSizeInBytes)
+
+    fpgaConfigurationHandlerError_t configError =
+        fpgaConfigurationHandlerDownloadConfigurationViaHttp(downloadRequest->url,
+                                                             downloadRequest->fileSizeInBytes,
+                                                             downloadRequest->startAddress);
+
+    // clean artifacts
+    free(downloadRequest->url);
+    free(downloadRequest);
+    downloadRequest = NULL;
+    PRINT("Download finished!")
+
+    if (configError != FPGA_RECONFIG_NO_ERROR) {
+        protocolPublishCommandResponse("compute-data", false);
+        PRINT("ERASE ERROR")
+    } else {
+        sleep_ms(10);
+        env5HwFpgaPowersOn();
+        PRINT("FPGA reconfigured")
+        protocolPublishCommandResponse("compute-data", true);
+    }
+}
+
+void publishData(char *dataID) {
+    protocolPublishData(dataID, fgpaReturnValue);
 }
 
 int main() {
     // initialize hardware
     init();
-    leds_init();
 
-    // add freeRTOS tasks
-    freeRtosTaskWrapperRegisterTask(enterBootModeTask, "enterBootModeTask", 0, FREERTOS_CORE_0);
-    freeRtosTaskWrapperRegisterTask(ledTask, "ledTask", 0, FREERTOS_CORE_1);
+    // subscribe to "compute-data" topic and configure FPGA from received .bin file
+    computeData();
 
-    // starts freeRTOS tasks
-    freeRtosTaskWrapperStartScheduler();
+    // publishes calculated value by FPGA via MQTT to topic "computed-result"
+    publishData("computed-result");
 }
+
+
+
