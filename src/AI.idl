@@ -1,0 +1,6 @@
+stub AI
+
+path ../middleware
+deploy 47 4000
+
+sync predict ( int8[6] inputs) : int8
