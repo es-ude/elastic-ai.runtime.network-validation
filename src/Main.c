@@ -10,6 +10,7 @@
 #include "NetworkConfiguration.h"
 #include "FpgaConfigurationHandler.h"
 #include "Protocol.h"
+#include "AI.h"
 
 // pico-sdk headers
 #include <hardware/watchdog.h>
@@ -143,11 +144,15 @@ int main() {
     // initialize hardware
     init();
 
-    // subscribe to "compute-data" topic and configure FPGA from received .bin file
-    computeData();
-
-    // publishes calculated value by FPGA via MQTT to topic "computed-result"
-    publishData("computed-result");
+    connectToBroker();
+    waitForModel();
+    AI_deploy();
+    SubscribeComputeTopic();
+    while(true) {
+        data = receiveData();
+        result = AI_predict(data);
+        publishResult(result);
+    }
 }
 
 
