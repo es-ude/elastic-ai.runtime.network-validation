@@ -37,6 +37,7 @@ else ()
         # add your own executable
         add_executable(main
                 src/Main.c
+                src/AI.c
                 src/NetworkConfiguration.c)
         target_include_directories(main PUBLIC ${CMAKE_SOURCE_DIR}/src)
         target_link_libraries(main
@@ -48,7 +49,8 @@ else ()
                 http_lib
                 uart_interface
                 enV5_hwc
-                fpga_configuration_handler)
+                fpga_configuration_handler
+                middleware_lib)
         create_enV5_executable(main)
     elseif (PICO_ON_DEVICE)
         message(WARNING "not building Project because TinyUSB submodule is not initialized in the SDK")

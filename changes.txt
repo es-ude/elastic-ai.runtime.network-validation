@@ -1,0 +1,1 @@
+FPGA configuration downlaod MQTT Topic changed from compute-data to fpga-binfile

@@ -3,23 +3,22 @@
  * Do not change it manually. 
  */
 
-#include "../middleware/middleware.h"
+#include "middleware.h"
 #include "Sleep.h"
-#include "ai.h"
+#include "AI.h"
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
-#define ADDR_SKELETON_INPUTS 0
-#define ADDR_COMPUTATION_ENABLE 100
+#define ADDR_COMPUTATION_ENABLE 0
+#define ADDR_SKELETON_INPUTS 1
+
 
 static void modelCompute(bool enable);
 static uint8_t get_id(void);
 
-static uint64_t accelerator_id = 47;
-static uint32_t accelerator_addr = 4000;
-
-bool AI_deploy(void)
+bool AI_deploy(uint32_t accelerator_addr, uint64_t accelerator_id)
 {
    middlewareInit();
    middlewareConfigureFpga(accelerator_addr);
@@ -29,25 +28,22 @@ bool AI_deploy(void)
    return is_deployed_successfully;
 }
 
-int8_t AI_predict(int8_t *inputs)
+void AI_predict(int8_t *inputs, size_t num_inputs, int8_t *result, size_t num_results)
 {
-   int8_t _result;
-
    middlewareInit();
    middlewareUserlogicEnable();
-   middlewareWriteBlocking(ADDR_SKELETON_INPUTS+0, (uint8_t*)(inputs), 6);
+   middlewareWriteBlocking(ADDR_SKELETON_INPUTS+0, (uint8_t*)(inputs), num_inputs);
    modelCompute(true);
 
    while( middlewareUserlogicGetBusyStatus() );
    modelCompute(false);
-   for(int i = 0; i < 1; i++){
-     middlewareReadBlocking(ADDR_SKELETON_INPUTS+0+i, (uint8_t *)(&_result)+i, 1);
-     middlewareReadBlocking(ADDR_SKELETON_INPUTS+0+i, (uint8_t *)(&_result)+i, 1);
+   for(int i = 0; i < num_results; i++){
+       middlewareReadBlocking(ADDR_SKELETON_INPUTS+0+i, (uint8_t *)(&result)+i, 1);
+       middlewareReadBlocking(ADDR_SKELETON_INPUTS+0+i, (uint8_t *)(&result)+i, 1);
    }
    modelCompute(false);
    middlewareUserlogicDisable();
    middlewareDeinit();
-   return _result;
 }
 
 static void modelCompute(bool enable)

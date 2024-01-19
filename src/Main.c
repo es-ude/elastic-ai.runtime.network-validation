@@ -1,29 +1,32 @@
 #define SOURCE_FILE "MAIN"
 
 // internal headers
+#include "AI.h"
 #include "Common.h"
 #include "Esp.h"
 #include "Flash.h"
-#include "enV5HwController.h"
+#include "FpgaConfigurationHandler.h"
 #include "MqttBroker.h"
 #include "Network.h"
 #include "NetworkConfiguration.h"
-#include "FpgaConfigurationHandler.h"
 #include "Protocol.h"
-#include "AI.h"
+#include "enV5HwController.h"
 
 // pico-sdk headers
-#include <hardware/watchdog.h>
 #include "hardware/spi.h"
+#include <hardware/watchdog.h>
 #include <pico/bootrom.h>
 #include <pico/stdlib.h>
 
 // external headers
-#include <string.h>
 #include <malloc.h>
+#include <string.h>
 
 /* region VARIABLES/DEFINES */
 
+//Changes these number to your needs
+size_t num_inputs = 20;
+size_t num_results = 10;
 // Flash
 spi_t spiToFlash = {.spi = spi0, .baudrate = 5000000, .sckPin = 2, .mosiPin = 3, .misoPin = 0};
 uint8_t flashChipSelectPin = 1;
@@ -39,7 +42,7 @@ typedef struct downloadRequest {
 } downloadRequest_t;
 downloadRequest_t *downloadRequest = NULL;
 
-//TODO find out, how FPGA "calculates" value and how to access it
+// TODO find out, how FPGA "calculates" value and how to access it
 char *fgpaReturnValue;
 
 /* endregion VARIABLES/DEFINES */
@@ -91,7 +94,7 @@ void receiveDownloadBinRequest(posting_t posting) {
     downloadRequest->startAddress = position;
 }
 
-void computeData(void) {
+void waitAndDownloadFpgaConfig(void) {
     /* NOTE:
      *   1. add listener for download start command (MQTT)
      *      uart handle should only set flag -> download handled at task
@@ -102,7 +105,8 @@ void computeData(void) {
      */
 
     sleep_ms(2000);
-    protocolSubscribeForCommand("compute-data", (subscriber_t){.deliver = receiveDownloadBinRequest});
+    protocolSubscribeForCommand("fpga-binfile",
+                                (subscriber_t){.deliver = receiveDownloadBinRequest});
 
     PRINT("FPGA Ready ...")
 
@@ -115,45 +119,73 @@ void computeData(void) {
                 downloadRequest->fileSizeInBytes)
 
     fpgaConfigurationHandlerError_t configError =
-        fpgaConfigurationHandlerDownloadConfigurationViaHttp(downloadRequest->url,
-                                                             downloadRequest->fileSizeInBytes,
-                                                             downloadRequest->startAddress);
+        fpgaConfigurationHandlerDownloadConfigurationViaHttp(
+            downloadRequest->url, downloadRequest->fileSizeInBytes, downloadRequest->startAddress);
+
+    if (configError != FPGA_RECONFIG_NO_ERROR) {
+        protocolPublishCommandResponse("fpga-binfile", false);
+        PRINT("ERASE ERROR")
+    } else {
+        sleep_ms(10);
+        env5HwFpgaPowersOn();
+        PRINT("FPGA reconfigured")
+        sleep_ms(2000);
+        // todo Receive Accelerator ID through MQTT and compare
+        if (AI_deploy(downloadRequest->startAddress, 47)) {
+            PRINT("FPGA deployed");
+            protocolPublishCommandResponse("fpga-binfile", true);
+        }
+    }
 
     // clean artifacts
     free(downloadRequest->url);
     free(downloadRequest);
     downloadRequest = NULL;
     PRINT("Download finished!")
-
-    if (configError != FPGA_RECONFIG_NO_ERROR) {
-        protocolPublishCommandResponse("compute-data", false);
-        PRINT("ERASE ERROR")
-    } else {
-        sleep_ms(10);
-        env5HwFpgaPowersOn();
-        PRINT("FPGA reconfigured")
-        protocolPublishCommandResponse("compute-data", true);
-    }
 }
 
-void publishData(char *dataID) {
-    protocolPublishData(dataID, fgpaReturnValue);
+void receiveDataToCompute(posting_t posting) {
+    // extract number of values
+    int8_t inputs[num_inputs];
+
+    // split string into substrings
+    char *dataToComputeSplit = strtok(posting.data, ";");
+    size_t index = 0;
+    while (dataToComputeSplit != NULL) {
+        inputs[index] = (int8_t)strtol(dataToComputeSplit, NULL, 10);
+        dataToComputeSplit = strtok(NULL, ";");
+    }
+    // compute results
+
+    int8_t results[num_results];
+    AI_predict(inputs, num_inputs, results, num_results);
+
+    // convert results to string to publish them via MQTT! Todo fuck with encodings
+    char *resultsToPublish = malloc(sizeof(char) * 5 * num_results);
+    resultsToPublish[0] = '\0';
+    for (int i = 0; i < num_results; i++) {
+        char result[5];
+        itoa(results[i], result, 10);
+        strncat(resultsToPublish, result, 5);
+        strncat(resultsToPublish, ";", 2);
+    }
+
+    // publish results
+    protocolPublishData("results", resultsToPublish);
+}
+
+void subscribeComputeTopic() {
+    protocolSubscribeForCommand("inputs", (subscriber_t){.deliver = receiveDataToCompute});
+}
+
+_Noreturn void mainloop(void) {
+    while (1) {}
 }
 
 int main() {
     // initialize hardware
     init();
-
-    connectToBroker();
-    waitForModel();
-    AI_deploy();
-    SubscribeComputeTopic();
-    while(true) {
-        data = receiveData();
-        result = AI_predict(data);
-        publishResult(result);
-    }
+    waitAndDownloadFpgaConfig();
+    subscribeComputeTopic();
+    mainloop();
 }
-
-
-
