@@ -42,9 +42,6 @@ typedef struct downloadRequest {
 } downloadRequest_t;
 downloadRequest_t *downloadRequest = NULL;
 
-// TODO find out, how FPGA "calculates" value and how to access it
-char *fgpaReturnValue;
-
 /* endregion VARIABLES/DEFINES */
 
 void init(void) {
