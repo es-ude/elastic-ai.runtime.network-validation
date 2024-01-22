@@ -27,6 +27,7 @@
 //Changes these number to your needs
 size_t num_inputs = 20;
 size_t num_results = 10;
+
 // Flash
 spi_t spiToFlash = {.spi = spi0, .baudrate = 5000000, .sckPin = 2, .mosiPin = 3, .misoPin = 0};
 uint8_t flashChipSelectPin = 1;
@@ -71,6 +72,7 @@ void init(void) {
 
 void receiveDownloadBinRequest(posting_t posting) {
     // get download request
+    PRINT("Received Download Bin Request");
     char *urlStart = strstr(posting.data, "URL:") + 4;
     char *urlEnd = strstr(urlStart, ";") - 1;
     size_t urlLength = urlEnd - urlStart + 1;
@@ -84,7 +86,7 @@ void receiveDownloadBinRequest(posting_t posting) {
     char *positionStart = strstr(posting.data, "POSITION:") + 9;
     char *positionEnd = strstr(positionStart, ";") - 1;
     size_t position = strtol(positionStart, &positionEnd, 10);
-
+    PRINT("Received download data as URL: %s, fileSizeInBytes: %s,startAddress: %s", url, length, position);
     downloadRequest = malloc(sizeof(downloadRequest_t));
     downloadRequest->url = url;
     downloadRequest->fileSizeInBytes = length;
@@ -102,7 +104,7 @@ void waitAndDownloadFpgaConfig(void) {
      */
 
     sleep_ms(2000);
-    protocolSubscribeForCommand("fpga-binfile",
+    protocolSubscribeForCommand("FLASH",
                                 (subscriber_t){.deliver = receiveDownloadBinRequest});
 
     PRINT("FPGA Ready ...")
@@ -120,7 +122,7 @@ void waitAndDownloadFpgaConfig(void) {
             downloadRequest->url, downloadRequest->fileSizeInBytes, downloadRequest->startAddress);
 
     if (configError != FPGA_RECONFIG_NO_ERROR) {
-        protocolPublishCommandResponse("fpga-binfile", false);
+        protocolPublishCommandResponse("FLASH", false);
         PRINT("ERASE ERROR")
     } else {
         sleep_ms(10);
@@ -130,7 +132,7 @@ void waitAndDownloadFpgaConfig(void) {
         // todo Receive Accelerator ID through MQTT and compare
         if (AI_deploy(downloadRequest->startAddress, 47)) {
             PRINT("FPGA deployed");
-            protocolPublishCommandResponse("fpga-binfile", true);
+            protocolPublishCommandResponse("FLASH", true);
         }
     }
 
