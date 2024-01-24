@@ -43,7 +43,6 @@ begin
     -- process data receive 
     process (clock, rd, wr, reset)
         variable int_addr : integer range 0 to 20000;
-        variable lest_state : std_logic_vector(3 downto 0);
     begin
         
         if reset = '0' then
@@ -59,7 +58,7 @@ begin
                         if int_addr<=15 then
                             data_out(7 downto 0) <= skeleten_id_str(int_addr);
                         elsif int_addr>=16 then
-                            data_out(7 downto 0)<= data_buf(int_addr);
+                            data_out(7 downto 0)<= data_buf(int_addr-16);
                         end if;
                     end if;
                 end if;
