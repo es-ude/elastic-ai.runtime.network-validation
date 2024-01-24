@@ -1,4 +1,11 @@
 # Requirements
+
+## Problems/Things to change
+### GetDesignID should not be part of the middleware but part of the skeleton
+
+### Reading two times the output
+
+
 ## What should the code in here do
 The idea is that I can validate the results of my HW-accelerator / network. 
 Therefore, I want a C-runtime image that I can build with the HW-accelerator matching stub/skeleton. 

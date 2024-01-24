@@ -16,15 +16,19 @@
 #define SOURCE_FILE "MIDDLEWARE-HWTEST"
 
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "hardware/spi.h"
 #include "pico/stdio.h"
 #include "pico/stdio_usb.h"
 
+#include "AI.h"
 #include "Common.h"
 #include "Esp.h"
 #include "Flash.h"
 #include "FpgaConfigurationHandler.h"
+#include "HTTP.h"
 #include "Network.h"
 #include "Sleep.h"
 #include "Spi.h"
@@ -37,8 +41,8 @@ spi_t spiConfiguration = {
     .spi = spi0, .baudrate = 5000000, .misoPin = 0, .mosiPin = 3, .sckPin = 2};
 uint8_t csPin = 1;
 
-char baseUrl[] = "http://10.0.0.102:1234/bitfile.bin";
-size_t file_length = 175384;
+extern char baseUrl[];
+
 uint32_t sectorIdForConfig = 1;
 
 
@@ -60,90 +64,148 @@ static void initHardware(void) {
         // wait for serial connection
     }
 }
-static void downloadBinFile(void) {
+
+static void connectToWifi(void) {
     espInit();
     PRINT("Try Connecting to WiFi")
     networkTryToConnectToNetworkUntilSuccessful(networkCredentials);
+}
 
+static void downloadBinFile(void) {
     PRINT("Downloading HW configuration...")
+    HttpResponse_t *length_response;
+    char *binfile_route = "/bitfile.bin";
+    char *length_route = "/length";
+    char url_buffer[256] = {0};
+    strcpy(url_buffer, baseUrl);
+    strcat(url_buffer, length_route);
+    HTTPGet(url_buffer, &length_response);
+    length_response->response[length_response->length] = '\0';
+    int file_length = strtol((char*)length_response->response, NULL, 10);
+    memset(url_buffer, 0, sizeof(url_buffer));
+    strcpy(url_buffer, baseUrl);
+    strcat(url_buffer, binfile_route);
     fpgaConfigurationHandlerError_t error =
-        fpgaConfigurationHandlerDownloadConfigurationViaHttp(baseUrl, file_length, sectorIdForConfig);
+        fpgaConfigurationHandlerDownloadConfigurationViaHttp(url_buffer, file_length, sectorIdForConfig);
     if (error != FPGA_RECONFIG_NO_ERROR) {
-        while (true) {
-            PRINT("Download failed!")
-            sleep_for_ms(3000);
-        }
+        PRINT("Download failed!")
+        sleep_for_ms(3000);
     }
     PRINT("Download Successful.")
 }
 
 static void getId(void) {
-    uint8_t id = middlewareGetDesignId();
-    PRINT("ID: 0x%02X", id)
+    uint8_t id[16] = {0};
+    AI_getId(id);
+    PRINT_BYTE_ARRAY("ID: ", id, 16);
+}
+
+typedef struct Command{
+    char key;
+    void (*fn)(void);
+    char *name;
+} Command;
+
+typedef struct CommandList{
+    uint8_t current_index;
+    Command commands[20];
+} CommandList;
+
+void add_command(CommandList *self, Command command) {
+    self->commands[self->current_index] = command;
+    self->current_index++;
+}
+
+
+void list_commands(CommandList *self) {
+    char text[256];
+    for (int i = 0; i < self->current_index; i++) {
+        Command c = self->commands[i];
+        sprintf(text, "%c: %s", c.key, c.name);
+        PRINT(text)
+    }
+}
+
+void run_command(CommandList *self, char key) {
+    int i;
+    for (i = 0; i < self->current_index; i++) {
+        Command c = self->commands[i];
+        if (c.key == key) {
+            PRINT("RUN COMMAND %s", c.name)
+            c.fn();
+            PRINT("DONE.")
+            break;
+        }
+    }
+    if (i == self->current_index) {
+        PRINT("COMMAND NOT FOUND, AVAILABLE COMMANDS ARE")
+        list_commands(self);
+    }
+}
+
+CommandList commands;
+
+#define ADD_COMMAND(_key, _fn) add_command(&commands, (Command){.fn=_fn, .key=_key, .name=#_fn})
+
+void turnOffLeds(){
+    middlewareSetFpgaLeds(0x00);
+}
+
+void turnOnLeds() {
+    middlewareSetFpgaLeds(0xff);
+}
+
+void help() {
+    list_commands(&commands);
+}
+
+void deploy() {
+    uint8_t id[16] = {0};
+    AI_deploy(1, id);
+}
+
+void predict() {
+    int8_t data[] = {0, 1, 2};
+    int8_t result[] = {127, 127, 127};
+    PRINT_BYTE_ARRAY("Predict for input: ", data, sizeof(data))
+    AI_predict(data, sizeof(data), result, sizeof(result));
+    PRINT_BYTE_ARRAY("Result: ", result, sizeof(result))
+}
+
+void middleware_read_from_addr_16() {
+    uint8_t data[16] = {0};
+    int8_t num_results = 16;
+
+//    for(int i = 0; i < num_results; i++){
+//        middlewareReadBlocking(16+i, data+i, 1);
+//        middlewareReadBlocking(16+i, data+i, 1);
+//    }
+    middlewareReadBlocking(16, data, 16);
+
+    PRINT_BYTE_ARRAY("Read data: ", data, 16)
 }
 
 _Noreturn static void runTest() {
     PRINT("===== START TEST =====")
     PRINT("Press 'h' to get all commands")
+    ADD_COMMAND('P', env5HwFpgaPowersOn);
+    ADD_COMMAND('p', env5HwFpgaPowersOff);
+    ADD_COMMAND('g', getId);
+    ADD_COMMAND('I', middlewareInit); // run after powering on fpga, needs to be rerun after powering fpga off
+    ADD_COMMAND('i', middlewareDeinit);
+    ADD_COMMAND('w', connectToWifi);
+    ADD_COMMAND('u', middlewareUserlogicDisable);
+    ADD_COMMAND('U', middlewareUserlogicEnable);
+    ADD_COMMAND('f', downloadBinFile);
+    ADD_COMMAND('l', turnOffLeds);
+    ADD_COMMAND('L', turnOnLeds);
+    ADD_COMMAND('h', help);
+    ADD_COMMAND('d', deploy);
+    ADD_COMMAND('x', predict);
+    ADD_COMMAND('r', middleware_read_from_addr_16);
     while (1) {
         char c = getchar_timeout_us(UINT32_MAX);
-
-        switch (c) {
-        case 'P':
-            env5HwFpgaPowersOn();
-            PRINT("FPGA powered ON")
-            break;
-        case 'p':
-            env5HwFpgaPowersOff();
-            PRINT("FPGA powered OFF")
-            break;
-        case 'I':
-            middlewareInit();
-            PRINT("Middleware init")
-            break;
-        case 'i':
-            middlewareDeinit();
-            PRINT("Middleware deinit")
-            break;
-        case 'U':
-            middlewareUserlogicEnable();
-            PRINT("Userlogic enabled")
-            break;
-        case 'u':
-            middlewareUserlogicDisable();
-            PRINT("Userlogic disabled")
-        case 'L':
-            middlewareSetFpgaLeds(0xFF); // ON
-            break;
-        case 'l':
-            middlewareSetFpgaLeds(0x00); // OFF
-            break;
-        case 'd':
-            getId();
-            break;
-        case 'r':
-            // TODO: run reconfigure test
-            break;
-        case 't':
-            // TODO: run receive data test
-            break;
-        case 'h':
-            PRINT("")
-            PRINT("Here are all commands")
-            PRINT("'P': Power FPGA on")
-            PRINT("'p': Power FPGA off")
-            PRINT("'I': Middleware init")
-            PRINT("'i': Middleware deinit")
-            PRINT("'U': Userlogic Enable")
-            PRINT("'u': Userlogic Disable")
-            PRINT("'L': FPGA LEDs on")
-            PRINT("'l': FPGA LEDs off")
-            PRINT("'d': get FPGA HW-Accelerator ID")
-            PRINT("")
-            break;
-        default:
-            PRINT("Waiting ...")
-        }
+        run_command(&commands, c);
     }
 }
 
@@ -151,7 +213,5 @@ int main() {
     PRINT("Start")
     initHardware();
     PRINT("Hardware Init completed")
-    downloadBinFile();
-    PRINT("Download Finished")
     runTest();
 }

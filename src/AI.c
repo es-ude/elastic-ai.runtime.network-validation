@@ -12,20 +12,35 @@
 #include <stdint.h>
 
 #define ADDR_COMPUTATION_ENABLE 0
-#define ADDR_SKELETON_INPUTS 1
-
+#define ID_LENGTH_IN_BYTES 16
+#define ADDR_SKELETON_INPUTS 16
+#define ADDR_ID 0
 
 static void modelCompute(bool enable);
-static uint8_t get_id(void);
+static void get_id(uint8_t *);
 
-bool AI_deploy(uint32_t accelerator_addr, uint64_t accelerator_id)
+
+void AI_getId(uint8_t *id) {
+    middlewareInit();
+    get_id(id);
+    middlewareInit();
+}
+
+bool AI_deploy(uint32_t accelerator_addr, const uint8_t *accelerator_id)
 {
    middlewareInit();
    middlewareConfigureFpga(accelerator_addr);
    sleep_for_ms(200);
-   uint8_t id = get_id();
-   PRINT("id: %i", get_id());
-   bool is_deployed_successfully = (id == accelerator_id);
+   uint8_t id[ID_LENGTH_IN_BYTES];
+   get_id(id);
+   PRINT_BYTE_ARRAY("id: ", id, ID_LENGTH_IN_BYTES);
+   bool is_deployed_successfully = true;
+   for (int i = 0; i < sizeof(id); i++) {
+       if (id[i] != accelerator_id[i]){
+           is_deployed_successfully = false;
+           break;
+       }
+   }
    middlewareDeinit();
    return is_deployed_successfully;
 }
@@ -34,15 +49,18 @@ void AI_predict(int8_t *inputs, size_t num_inputs, int8_t *result, size_t num_re
 {
    middlewareInit();
    middlewareUserlogicEnable();
-   middlewareWriteBlocking(ADDR_SKELETON_INPUTS+0, (uint8_t*)(inputs), num_inputs);
+   PRINT_DEBUG("Writing inputs")
+   middlewareWriteBlocking(ADDR_SKELETON_INPUTS + 0, (uint8_t *)(inputs), num_inputs);
    modelCompute(true);
-
+   PRINT_DEBUG("started computation, waiting for done")
    while( middlewareUserlogicGetBusyStatus() );
    modelCompute(false);
+   PRINT_DEBUG("fetching results")
    for(int i = 0; i < num_results; i++){
-       middlewareReadBlocking(ADDR_SKELETON_INPUTS+0+i, (uint8_t *)(&result)+i, 1);
-       middlewareReadBlocking(ADDR_SKELETON_INPUTS+0+i, (uint8_t *)(&result)+i, 1);
+       middlewareReadBlocking(ADDR_SKELETON_INPUTS+0+i, (uint8_t *)(result)+i, 1);
+       middlewareReadBlocking(ADDR_SKELETON_INPUTS+0+i, (uint8_t *)(result)+i, 1);
    }
+   PRINT_DEBUG("done.")
    middlewareUserlogicDisable();
    middlewareDeinit();
 }
@@ -53,11 +71,9 @@ static void modelCompute(bool enable)
    middlewareWriteBlocking(ADDR_COMPUTATION_ENABLE, &cmd, 1);
 }
 
-static uint8_t get_id(void)
+static void get_id(uint8_t* out)
 {
    middlewareUserlogicEnable();
-   uint8_t id = middlewareGetDesignId();
+   middlewareReadBlocking(ADDR_ID, out, ID_LENGTH_IN_BYTES);
    middlewareUserlogicDisable();
-   return id;
 }
-
