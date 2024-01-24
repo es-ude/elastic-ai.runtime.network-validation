@@ -22,7 +22,7 @@ else ()
     # include pico-sdk
     include(extern/elastic-ai.runtime.enV5/extern/pico-sdk/pico_sdk_init.cmake)
 
-    project(enV5 C CXX ASM)
+    project(enV5.NetworkValidation C CXX ASM)
 
     # initialize pico-sdk
     pico_sdk_init()
