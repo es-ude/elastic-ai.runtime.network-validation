@@ -8,12 +8,13 @@
 #include "FpgaConfigurationHandler.h"
 #include "MqttBroker.h"
 #include "Network.h"
-#include "NetworkConfiguration.h"
 #include "Protocol.h"
 #include "enV5HwController.h"
+#include "FreeRtosTaskWrapper.h"
 
 // pico-sdk headers
 #include "hardware/spi.h"
+#include "middleware.h"
 #include <hardware/watchdog.h>
 #include <pico/bootrom.h>
 #include <pico/stdlib.h>
@@ -23,6 +24,10 @@
 #include <string.h>
 
 /* region VARIABLES/DEFINES */
+
+extern networkCredentials_t networkCredentials;
+extern mqttBrokerHost_t mqttHost;
+
 
 //Changes these number to your needs
 size_t num_inputs = 20;
@@ -35,44 +40,46 @@ uint8_t flashChipSelectPin = 1;
 // MQTT
 char *twinID;
 bool subscribed = false;
+bool flashing = false;
 
-typedef struct downloadRequest {
+typedef struct {
     char *url;
     size_t fileSizeInBytes;
-    size_t startAddress;
+    size_t startSectorId;
 } downloadRequest_t;
 downloadRequest_t *downloadRequest = NULL;
 
 /* endregion VARIABLES/DEFINES */
 
 void init(void) {
-    // First check if we crash last time -> reboot into boot rom mode
-    if (watchdog_enable_caused_reboot()) {
-        reset_usb_boot(0, 0);
-    }
+    // Should always be called first thing to prevent unique behavior, like current leakage
+    env5HwInit();
 
-    // init usb
-    stdio_init_all();
-
-    // waits for usb connection, REMOVE to continue without waiting for connection
-    while ((!stdio_usb_connected())) {}
-
-    // Checks connection to ESP and initialize ESP
+    // Connect to Wi-Fi network and MQTT Broker
     espInit();
-
-    // initialize WiFi and MQTT broker
     networkTryToConnectToNetworkUntilSuccessful(networkCredentials);
     mqttBrokerConnectToBrokerUntilSuccessful(mqttHost, "eip://uni-due.de/es", "enV5");
 
-    // initialize FPGA and flash
+    /* Always release flash after use:
+     *   -> FPGA and MCU share the bus to flash-memory.
+     * Make sure this is only enabled while FPGA does not use it and release after use before
+     * powering on, resetting or changing the configuration of the FPGA.
+     * FPGA needs that bus during reconfiguration and **only** during reconfiguration.
+     */
     flashInit(&spiToFlash, flashChipSelectPin);
-    env5HwInit();
     fpgaConfigurationHandlerInitialize();
+    env5HwFpgaPowersOff();
+
+    // initialize the serial output
+    stdio_init_all();
+    while ((!stdio_usb_connected())) {
+        // wait for serial connection
+    }
 }
 
 void receiveDownloadBinRequest(posting_t posting) {
+    PRINT("RECEIVED FLASH REQUEST")
     // get download request
-    PRINT("Received Download Bin Request");
     char *urlStart = strstr(posting.data, "URL:") + 4;
     char *urlEnd = strstr(urlStart, ";") - 1;
     size_t urlLength = urlEnd - urlStart + 1;
@@ -86,14 +93,14 @@ void receiveDownloadBinRequest(posting_t posting) {
     char *positionStart = strstr(posting.data, "POSITION:") + 9;
     char *positionEnd = strstr(positionStart, ";") - 1;
     size_t position = strtol(positionStart, &positionEnd, 10);
-    PRINT("Received download data as URL: %s, fileSizeInBytes: %s,startAddress: %s", url, length, position);
+
     downloadRequest = malloc(sizeof(downloadRequest_t));
     downloadRequest->url = url;
     downloadRequest->fileSizeInBytes = length;
-    downloadRequest->startAddress = position;
+    downloadRequest->startSectorId = position;
 }
 
-void waitAndDownloadFpgaConfig(void) {
+_Noreturn void waitAndDownloadFpgaConfig(void) {
     /* NOTE:
      *   1. add listener for download start command (MQTT)
      *      uart handle should only set flag -> download handled at task
@@ -103,44 +110,59 @@ void waitAndDownloadFpgaConfig(void) {
      *      handled in UART interrupt
      */
 
-    sleep_ms(2000);
+    freeRtosTaskWrapperTaskSleep(2000);
     protocolSubscribeForCommand("FLASH",
                                 (subscriber_t){.deliver = receiveDownloadBinRequest});
+    publishAliveStatusMessage("");
 
     PRINT("FPGA Ready ...")
+    while (true) {
+        if (downloadRequest == NULL) {
+            freeRtosTaskWrapperTaskSleep(1000);
+            continue;
+        }
+        flashing = true;
 
-    while (downloadRequest == NULL) {}
+        PRINT("Starting to download bitfile...")
 
-    env5HwFpgaPowersOff();
+        env5HwFpgaPowersOff();
 
-    PRINT_DEBUG("Download: position in flash: %i, address: %s, size: %i",
-                downloadRequest->startAddress, downloadRequest->url,
-                downloadRequest->fileSizeInBytes)
+        PRINT_DEBUG("Download: position in flash: %i, address: %s, size: %i",
+                    downloadRequest->startSectorId, downloadRequest->url,
+                    downloadRequest->fileSizeInBytes)
 
-    fpgaConfigurationHandlerError_t configError =
-        fpgaConfigurationHandlerDownloadConfigurationViaHttp(
-            downloadRequest->url, downloadRequest->fileSizeInBytes, downloadRequest->startAddress);
+        fpgaConfigurationHandlerError_t configError =
+            fpgaConfigurationHandlerDownloadConfigurationViaHttp(downloadRequest->url,
+                                                                 downloadRequest->fileSizeInBytes,
+                                                                 downloadRequest->startSectorId);
 
-    if (configError != FPGA_RECONFIG_NO_ERROR) {
-        protocolPublishCommandResponse("FLASH", false);
-        PRINT("ERASE ERROR")
-    } else {
-        sleep_ms(10);
-        env5HwFpgaPowersOn();
-        PRINT("FPGA reconfigured")
-        sleep_ms(2000);
-        // todo Receive Accelerator ID through MQTT and compare
-        if (AI_deploy(downloadRequest->startAddress, 47)) {
-            PRINT("FPGA deployed");
-            protocolPublishCommandResponse("FLASH", true);
+        // clean artifacts
+        free(downloadRequest->url);
+        free(downloadRequest);
+        downloadRequest = NULL;
+        PRINT("Download finished!")
+
+        PRINT("Try reconfigure FPGA")
+        if (configError != FPGA_RECONFIG_NO_ERROR) {
+            protocolPublishCommandResponse("FLASH", false);
+            PRINT("ERASE ERROR")
+        } else {
+            freeRtosTaskWrapperTaskSleep(10);
+            env5HwFpgaPowersOn();
+            freeRtosTaskWrapperTaskSleep(500);
+            if (!AI_deploy(downloadRequest->startSectorId, 47)) {
+                PRINT("Deploy failed!")
+                protocolPublishCommandResponse("FLASH", false);
+            }
+            else {
+                PRINT("FPGA reconfigured")
+                protocolPublishCommandResponse("FLASH", true);
+            }
+            flashing = false;
+            freeRtosTaskWrapperTaskSleep(10000);
+
         }
     }
-
-    // clean artifacts
-    free(downloadRequest->url);
-    free(downloadRequest);
-    downloadRequest = NULL;
-    PRINT("Download finished!")
 }
 
 void receiveDataToCompute(posting_t posting) {
@@ -177,14 +199,30 @@ void subscribeComputeTopic() {
     protocolSubscribeForCommand("inputs", (subscriber_t){.deliver = receiveDataToCompute});
 }
 
-_Noreturn void mainloop(void) {
-    while (1) {}
-}
 
 int main() {
     // initialize hardware
     init();
-    waitAndDownloadFpgaConfig();
-    subscribeComputeTopic();
-    mainloop();
+    sleep_ms(2000);
+    env5HwFpgaPowersOn();
+    PRINT("FPGA powered on");
+    sleep_ms(56000);
+    PRINT("FPGA reconfigured?!")
+    uint8_t led_status;
+    while (1){
+        middlewareSetFpgaLeds(0xff);
+        sleep_ms(1000);
+        led_status = middlewareGetLeds();
+        PRINT("%i", led_status);
+        sleep_ms(1000);
+        middlewareSetFpgaLeds(0x00);
+        sleep_ms(1000);
+        led_status = middlewareGetLeds();
+        PRINT("%i", led_status);
+        sleep_ms(1000);
+    }
+
+    //freeRtosTaskWrapperRegisterTask(waitAndDownloadFpgaConfig,"fpgaDownloadAndFlash", 0, FREERTOS_CORE_0);
+    //subscribeComputeTopic();
+    //freeRtosTaskWrapperStartScheduler();
 }
