@@ -1,4 +1,7 @@
+import os
 from io import BytesIO
+from pathlib import Path
+
 from flask import Flask, send_file
 
 bytes_per_request = 512  # should be matching with the page size of the flash
@@ -18,6 +21,11 @@ def read_slice(position: int, filename: str) -> bytes:
         # print_bytearray(chunk)
     return chunk
 
+@app.route("/length")
+def get_size():
+    size = os.path.getsize("../../bitfile.bin")
+    return str(size)
+
 
 @app.route("/bitfile.bin/<position>")
 def get_file_fast(position: str):
@@ -26,7 +34,7 @@ def get_file_fast(position: str):
     """
     buffer = BytesIO()
     buffer.write(
-        read_slice(int(position), "./echo_server/env5_top_reconfig.bin")
+        read_slice(int(position), "../../bitfile.bin")
     )
     buffer.seek(0)
     return send_file(
