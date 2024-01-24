@@ -1,7 +1,7 @@
 ### Custom ignores
 build/
 out/
-
+src/NetworkConfiguration.c
 
 ### IntelliJ IDEA ###
 .idea/
