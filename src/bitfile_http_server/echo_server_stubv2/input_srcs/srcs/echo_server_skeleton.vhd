@@ -46,36 +46,24 @@ begin
         variable lest_state : std_logic_vector(3 downto 0);
     begin
         
-        if reset = '1' then
-            lest_state := x"f";
-        else
+        if reset = '0' then
             if rising_edge(clock) then
-                -- process address of written value                
+                -- process address of written value
                 if wr = '1' or rd = '1' then
                     int_addr := to_integer(unsigned(address_in));
                     if wr = '1' then
-                    
-                        if int_addr<13 then
-                            data_buf(int_addr) <= data_in(7 downto 0);
-                        elsif int_addr=13 then
-                            lest_state(3 downto 0) := data_in(3 downto 0);
+                        if int_addr>=16 then
+                            data_buf(int_addr-16) <= data_in(7 downto 0);
                         end if;
                     elsif rd = '1' then
-                        if int_addr<13 then
+                        if int_addr<=15 then
+                            data_out(7 downto 0) <= skeleten_id_str(int_addr);
+                        elsif int_addr>=16 then
                             data_out(7 downto 0)<= data_buf(int_addr);
-                        elsif int_addr=13 then
-                            data_out(7 downto 4)<= (others=>'0');
-                            data_out(3 downto 0)<= lest_state(3 downto 0);
-                        elsif int_addr>=2000 and int_addr<2016 then
-                            data_out(7 downto 0) <= skeleten_id_str(int_addr-2000);
                         end if;
                     end if;
                 end if;
-                
-                led_ctrl <= lest_state;
             end if;
         end if;
-
     end process;
-
 end rtl;
