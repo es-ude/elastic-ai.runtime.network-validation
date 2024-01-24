@@ -5,8 +5,8 @@
  * NOTE: To run this test, a server that serves the HTTPGet request is required.
  *       This server can be started by running the `bitfile_http_server.py` script
  *       in the `bitfile_scripts` folder.
- *       After starting the server, it shows an IP-address where it can be reached.
- *       This IP address needs to be used for the `baseUrl` field.
+ *       After starting the server, it shows an IP-address and port where it can be reached.
+ *       This IP address needs to be used for the `baseUrl` field in your NetworkConfiguration.c.
  *
  * NOTE: If you update the echo_server binary file you have to update the `configSize` field
  *       with the correct size of the file in bytes.
