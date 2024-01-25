@@ -71,27 +71,62 @@ static void connectToWifi(void) {
     networkTryToConnectToNetworkUntilSuccessful(networkCredentials);
 }
 
+static void buildRestCallUrl(const char* restCall, char* out, size_t out_size){
+    memset(out, 0, out_size);
+    strcpy(out, baseUrl);
+    strcat(out, restCall);
+}
+
+
+static char* makeRestCall(const char* restCall){
+    HttpResponse_t *response;
+    char full_url[256] = {0};
+    buildRestCallUrl(restCall, full_url, sizeof(full_url));
+    HTTPGet(full_url, &response);
+    char* out_string = malloc(response->length+1);
+    memcpy(out_string, response->response, response->length);
+    out_string[response->length] = '\0';
+    HTTPCleanResponseBuffer(response);
+    return out_string;
+}
+
+static int getIntViaRest(const char* restCall){
+    char* length_as_string = makeRestCall(restCall);
+    int data_length = strtol((char*)length_as_string, NULL, 10);
+    free(length_as_string);
+    return data_length;
+}
+
 static void downloadBinFile(void) {
     PRINT("Downloading HW configuration...")
-    HttpResponse_t *length_response;
-    char *binfile_route = "/bitfile.bin";
-    char *length_route = "/length";
-    char url_buffer[256] = {0};
-    strcpy(url_buffer, baseUrl);
-    strcat(url_buffer, length_route);
-    HTTPGet(url_buffer, &length_response);
-    length_response->response[length_response->length] = '\0';
-    int file_length = strtol((char*)length_response->response, NULL, 10);
-    memset(url_buffer, 0, sizeof(url_buffer));
-    strcpy(url_buffer, baseUrl);
-    strcat(url_buffer, binfile_route);
+    int file_length  = getIntViaRest("/binfile_length");
+    char url[256];
+    buildRestCallUrl("/binfile", url, sizeof(url));
     fpgaConfigurationHandlerError_t error =
-        fpgaConfigurationHandlerDownloadConfigurationViaHttp(url_buffer, file_length, sectorIdForConfig);
+        fpgaConfigurationHandlerDownloadConfigurationViaHttp(url, file_length, sectorIdForConfig);
     if (error != FPGA_RECONFIG_NO_ERROR) {
         PRINT("Download failed!")
         sleep_for_ms(3000);
     }
     PRINT("Download Successful.")
+}
+
+static int8_t* downloadDataToCompute(){
+
+    int data_length = getIntViaRest("/data_to_compute_length");
+
+    char* data_as_string = makeRestCall("/data_to_compute");
+
+    int8_t* inputs = malloc(data_length);
+
+    // split string into substrings
+    char *dataToComputeSplit = strtok(data_as_string, ";");
+    size_t index = 0;
+    while (dataToComputeSplit != NULL) {
+        inputs[index] = (int8_t)strtol(dataToComputeSplit, NULL, 10);
+        dataToComputeSplit = strtok(NULL, ";");
+    }
+    return inputs;
 }
 
 static void getId(void) {
@@ -165,10 +200,11 @@ void deploy() {
 }
 
 void predict() {
-    int8_t data[] = {0, 1, 2};
-    int8_t result[] = {127, 127, 127};
-    PRINT_BYTE_ARRAY("Predict for input: ", data, sizeof(data))
-    AI_predict(data, sizeof(data), result, sizeof(result));
+    int8_t* input_data = downloadDataToCompute();
+    int result_length = getIntViaRest("/result_length");
+    int8_t result[result_length];
+    PRINT_BYTE_ARRAY("Predict for input: ", input_data, sizeof(input_data))
+    AI_predict(input_data, sizeof(input_data), result, sizeof(result));
     PRINT_BYTE_ARRAY("Result: ", result, sizeof(result))
 }
 

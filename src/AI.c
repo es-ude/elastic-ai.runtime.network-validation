@@ -32,6 +32,7 @@ bool AI_deploy(uint32_t accelerator_addr, const uint8_t *accelerator_id)
    middlewareConfigureFpga(accelerator_addr);
    sleep_for_ms(200);
    uint8_t id[ID_LENGTH_IN_BYTES];
+   middlewareUserlogicEnable();
    get_id(id);
    PRINT_BYTE_ARRAY("id: ", id, ID_LENGTH_IN_BYTES);
    bool is_deployed_successfully = true;
@@ -41,6 +42,7 @@ bool AI_deploy(uint32_t accelerator_addr, const uint8_t *accelerator_id)
            break;
        }
    }
+   middlewareUserlogicDisable();
    middlewareDeinit();
    return is_deployed_successfully;
 }
