@@ -1,0 +1,137 @@
+= AI Validation
+Firstname Lastname <author@asciidoctor.org>
+3.0, July 29, 2022: AsciiDoc article template
+:toc:
+:icons: font
+:url-quickref: https://docs.asciidoctor.org/asciidoc/latest/syntax-quick-reference/
+
+Notes from preparing the AI validation.
+
+== Idea
+
+1. flash AI Accelerator validation firmware to env5 mcu
+2. build a new hw accelerator
+3. download the HW accelerator to env5
+4. download input test data for the accelerator
+5. run a prediction with the accelerator
+6. print the result from env5 via serial
+
+We want to reduce the need for having to rebuild and flash a new firmware for the mcu, when testing a new hw accelerator.
+
+== Workflow
+
+* create `NetworkConfiguration.c` in `src/` folder
+* add your network credentials to `NetworkConfiguration.c` as follows
+....
+networkCredentials_t networkCredentials = {
+    .ssid = "your_ssid",
+    .password = "your_password"
+};
+....
+* start the http server in `src/bitfile_http_server/bitfile_http_server.py`
+* copy the url that was printed on the terminal in the previous step and add the following to `NetworkConfiguration.c`
+....
+char baseUrl[] = "your_url_from_bitfile_server";
+....
+* build and flash `AIValidation.c`
+* build your HW Accelerator
+* copy the file to `build_dir_output/output/env5_top_reconfig.bin`. If you use the the script in `src/vivado_build/autobuild_binfile_vivado2021.1.sh` the file should already be in the right place
+* open a minicom with `minicom -b 115200 -o -D /path_to_your_tty`
+* hit `h` to print the available commands
+* use the menu to
+** connect to wifi
+** download the binfile
+** predict
+
+
+== REST Server
+The server is used to provide the bitfile and input data for testing offers the following methods
+
+* `/binfile/<position>`: download the part of the binfiile at position `<position>`
+* `/binfile_length`: get the size of the binfile in bytes as a string
+* `/data_to_compute`: download the input data for a prediction as a string. Different values are separated by `;`
+* `/data_to_compute_length`: get the number of input data points as a string. E.g., if data has the form `"1;2;3"`, this method will return `"3"`.
+* `/result_length`: get the number of values that will be produced by the prediction
+
+== First level heading
+
+This is a paragraph with a *bold* word and an _italicized_ word.
+
+.Image caption
+image::image-file-name.png[I am the image alt text.]
+
+This is another paragraph.footnote:[I am footnote text and will be displayed at the bottom of the article.]
+
+=== Second level heading
+
+.Unordered list title
+* list item 1
+** nested list item
+*** nested nested list item 1
+*** nested nested list item 2
+* list item 2
+
+This is a paragraph.
+
+.Example block title
+====
+Content in an example block is subject to normal substitutions.
+====
+
+.Sidebar title
+****
+Sidebars contain aside text and are subject to normal substitutions.
+****
+
+==== Third level heading
+
+[#id-for-listing-block]
+.Listing block title
+----
+Content in a listing block is subject to verbatim substitutions.
+Listing block content is commonly used to preserve code input.
+----
+
+===== Fourth level heading
+
+.Table title
+|===
+|Column heading 1 |Column heading 2
+
+|Column 1, row 1
+|Column 2, row 1
+
+|Column 1, row 2
+|Column 2, row 2
+|===
+
+====== Fifth level heading
+
+[quote,firstname lastname,movie title]
+____
+I am a block quote or a prose excerpt.
+I am subject to normal substitutions.
+____
+
+[verse,firstname lastname,poem title and more]
+____
+I am a verse block.
+  Indents and endlines are preserved in verse blocks.
+____
+
+== First level heading
+
+TIP: There are five admonition labels: Tip, Note, Important, Caution and Warning.
+
+// I am a comment and won't be rendered.
+
+. ordered list item
+.. nested ordered list item
+. ordered list item
+
+The text at the end of this sentence is cross referenced to <<_third_level_heading,the third level heading>>
+
+== First level heading
+
+This is a link to the https://docs.asciidoctor.org/home/[Asciidoctor documentation].
+This is an attribute reference {url-quickref}[that links this text to the AsciiDoc Syntax Quick Reference].
