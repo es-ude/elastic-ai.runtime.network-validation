@@ -30,6 +30,7 @@
 #include "FpgaConfigurationHandler.h"
 #include "HTTP.h"
 #include "Network.h"
+#include "RestMethods.h"
 #include "Sleep.h"
 #include "Spi.h"
 #include "enV5HwController.h"
@@ -40,8 +41,6 @@ extern networkCredentials_t networkCredentials;
 spi_t spiConfiguration = {
     .spi = spi0, .baudrate = 5000000, .misoPin = 0, .mosiPin = 3, .sckPin = 2};
 uint8_t csPin = 1;
-
-extern char baseUrl[];
 
 uint32_t sectorIdForConfig = 1;
 
@@ -69,32 +68,6 @@ static void connectToWifi(void) {
     espInit();
     PRINT("Try Connecting to WiFi")
     networkTryToConnectToNetworkUntilSuccessful(networkCredentials);
-}
-
-static void buildRestCallUrl(const char* restCall, char* out, size_t out_size){
-    memset(out, 0, out_size);
-    strcpy(out, baseUrl);
-    strcat(out, restCall);
-}
-
-
-static char* makeRestCall(const char* restCall){
-    HttpResponse_t *response;
-    char full_url[256] = {0};
-    buildRestCallUrl(restCall, full_url, sizeof(full_url));
-    HTTPGet(full_url, &response);
-    char* out_string = malloc(response->length+1);
-    memcpy(out_string, response->response, response->length);
-    out_string[response->length] = '\0';
-    HTTPCleanResponseBuffer(response);
-    return out_string;
-}
-
-static int getIntViaRest(const char* restCall){
-    char* length_as_string = makeRestCall(restCall);
-    int data_length = strtol((char*)length_as_string, NULL, 10);
-    free(length_as_string);
-    return data_length;
 }
 
 static void downloadBinFile(void) {
@@ -205,6 +178,7 @@ void predict() {
     int8_t result[result_length];
     PRINT_BYTE_ARRAY("Predict for input: ", input_data, sizeof(input_data))
     AI_predict(input_data, sizeof(input_data), result, sizeof(result));
+    free(input_data);
     PRINT_BYTE_ARRAY("Result: ", result, sizeof(result))
 }
 

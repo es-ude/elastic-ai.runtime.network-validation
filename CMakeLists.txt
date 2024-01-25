@@ -57,6 +57,7 @@ else ()
         add_executable(AiValidation
                 src/AiValidation.c
                 src/AI.c
+                src/RestMethods.c
                 src/NetworkConfiguration.c)
         target_include_directories(AiValidation PUBLIC ${CMAKE_SOURCE_DIR}/src)
         target_link_libraries(AiValidation
