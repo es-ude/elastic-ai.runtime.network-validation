@@ -58,7 +58,7 @@ else ()
                 src/AiValidation.c
                 src/AI.c
                 src/RestMethods.c
-                src/NetworkConfiguration.c)
+                src/NetworkConfiguration.c src/Command.h src/Command.c)
         target_include_directories(AiValidation PUBLIC ${CMAKE_SOURCE_DIR}/src)
         target_link_libraries(AiValidation
                 flash_lib

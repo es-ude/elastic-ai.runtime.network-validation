@@ -24,6 +24,7 @@
 #include "pico/stdio_usb.h"
 
 #include "AI.h"
+#include "Command.h"
 #include "Common.h"
 #include "Esp.h"
 #include "Flash.h"
@@ -44,6 +45,7 @@ uint8_t csPin = 1;
 
 uint32_t sectorIdForConfig = 1;
 
+CommandList commands;
 
 static void initHardware(void) {
     // Should always be called first thing to prevent unique behavior, like current leakage
@@ -107,53 +109,6 @@ static void getId(void) {
     AI_getId(id);
     PRINT_BYTE_ARRAY("ID: ", id, 16);
 }
-
-typedef struct Command{
-    char key;
-    void (*fn)(void);
-    char *name;
-} Command;
-
-typedef struct CommandList{
-    uint8_t current_index;
-    Command commands[20];
-} CommandList;
-
-void add_command(CommandList *self, Command command) {
-    self->commands[self->current_index] = command;
-    self->current_index++;
-}
-
-
-void list_commands(CommandList *self) {
-    char text[256];
-    for (int i = 0; i < self->current_index; i++) {
-        Command c = self->commands[i];
-        sprintf(text, "%c: %s", c.key, c.name);
-        PRINT(text)
-    }
-}
-
-void run_command(CommandList *self, char key) {
-    int i;
-    for (i = 0; i < self->current_index; i++) {
-        Command c = self->commands[i];
-        if (c.key == key) {
-            PRINT("RUN COMMAND %s", c.name)
-            c.fn();
-            PRINT("DONE.")
-            break;
-        }
-    }
-    if (i == self->current_index) {
-        PRINT("COMMAND NOT FOUND, AVAILABLE COMMANDS ARE")
-        list_commands(self);
-    }
-}
-
-CommandList commands;
-
-#define ADD_COMMAND(_key, _fn) add_command(&commands, (Command){.fn=_fn, .key=_key, .name=#_fn})
 
 void turnOffLeds(){
     middlewareSetFpgaLeds(0x00);
